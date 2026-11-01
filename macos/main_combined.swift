@@ -75,6 +75,14 @@ func resPath(_ name: String) -> String {
     return (bin as NSString).deletingLastPathComponent + "/../Resources/" + name
 }
 
+func blackholeInstalled() -> Bool {
+    FileManager.default.fileExists(atPath: "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver")
+}
+
+func pythonDepsOK() -> Bool {
+    runSync("/usr/bin/python3", ["-c", "import demucs, torch, sounddevice, soundfile"]).code == 0
+}
+
 // MARK: - 伴奏制作流水线
 
 final class Pipeline {
@@ -291,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        checkEnvironment()
     }
 
     func buildUI() {
@@ -466,6 +475,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func start() {
         guard !recRunning else { return }
+        if !blackholeInstalled() {
+            append1("⚠️ 缺少 BlackHole 虚拟声卡（录音必需），正在自动下载…")
+            downloadBlackHole()
+            return
+        }
+        if !pythonDepsOK() {
+            append1("⚠️ 缺少 AI 依赖（demucs/torch），正在自动安装（首次约 5-10 分钟）…")
+            installPythonDeps()
+            return
+        }
         clearLog(log1)
         pipeline.outputDir = saveDir
         recRunning = true
@@ -479,6 +498,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func stopRec() {
         pipeline.stopRecording()
         append1("⏹ 已请求停止录音…")
+    }
+
+    // MARK: 环境自动检查与修复
+
+    func checkEnvironment() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            if blackholeInstalled() {
+                self.append1("✅ BlackHole 虚拟声卡：已安装")
+            } else {
+                self.append1("⚠️ 未检测到 BlackHole 虚拟声卡，正在自动下载…")
+                self.downloadBlackHole()
+            }
+            if pythonDepsOK() {
+                self.append1("✅ AI 依赖（demucs/torch）：已就绪")
+            } else {
+                self.append1("⚠️ 未检测到 AI 依赖，正在自动安装（首次约 5-10 分钟）…")
+                self.installPythonDeps()
+            }
+        }
+    }
+
+    func downloadBlackHole() {
+        let dest = NSHomeDirectory() + "/Downloads/BlackHole2ch-0.7.1.pkg"
+        let url = "https://existential.audio/downloads/BlackHole2ch-0.7.1.pkg"
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let r = runSync("/usr/bin/curl", ["-sL", "--max-time", "300", "-A", "Mozilla/5.0", "-o", dest, url])
+            DispatchQueue.main.async {
+                if r.code == 0 && FileManager.default.fileExists(atPath: dest) {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: dest))
+                    self?.append1("✅ 已下载 BlackHole 安装包，请在弹窗中完成安装，装完再点「开始制作伴奏」")
+                } else {
+                    self?.append1("❌ 下载 BlackHole 失败，请到 existential.audio 手动下载")
+                }
+            }
+        }
+    }
+
+    func installPythonDeps() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            p.arguments = ["-m", "pip", "install", "--user",
+                           "-i", "https://pypi.tuna.tsinghua.edu.cn/simple",
+                           "numpy==1.26.4", "sounddevice", "soundfile",
+                           "torch==2.2.2", "torchaudio==2.2.2", "demucs==4.0.1"]
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = pipe
+            pipe.fileHandleForReading.readabilityHandler = { h in
+                let d = h.availableData
+                guard let s = String(data: d, encoding: .utf8), !s.isEmpty else { return }
+                for line in s.split(separator: "\n") {
+                    let l = String(line)
+                    if l.contains("Successfully installed") || l.contains("ERROR") || l.contains("error") {
+                        DispatchQueue.main.async { self?.append1(l) }
+                    }
+                }
+            }
+            try? p.run()
+            p.waitUntilExit()
+            DispatchQueue.main.async {
+                if p.terminationStatus == 0 {
+                    self?.append1("✅ 依赖安装完成，现在可以点「开始制作伴奏」了")
+                } else {
+                    self?.append1("❌ 依赖安装失败，请检查网络后重启应用重试")
+                }
+            }
+        }
     }
 
     func setRecRunning(_ running: Bool) {
