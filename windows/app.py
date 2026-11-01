@@ -305,6 +305,16 @@ class App:
         save = self.save_path.get()
         if not os.path.isdir(save):
             messagebox.showwarning('提示', '请先选择保存路径'); return
+        # 首次运行检查回环录音是否可用，不可用则自动下载 VB-Cable
+        if find_loopback() is None:
+            if messagebox.askyesno('需要虚拟声卡',
+                                   '未检测到回环录音设备（无法录制电脑声音）。\n\n'
+                                   '是否自动下载 VB-Cable 虚拟声卡？\n'
+                                   '（下载后需手动安装并重启电脑）'):
+                self.log2.delete('1.0', 'end')
+                self.btn_rec.config(state='disabled')
+                threading.Thread(target=self._download_vbcable, daemon=True).start()
+            return
         self.log2.delete('1.0', 'end')
         self.btn_rec.config(state='disabled'); self.btn_stop.config(state='normal')
         work = os.path.join(os.environ.get('TEMP', '.'), 'yybz-' + str(int(time.time())))
@@ -345,6 +355,27 @@ class App:
             self._done()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _download_vbcable(self):
+        import zipfile
+        url = 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip'
+        dest = os.path.join(os.path.expanduser('~'), 'Downloads', 'VB-Cable')
+        os.makedirs(dest, exist_ok=True)
+        zip_path = os.path.join(dest, 'VBCABLE_Driver_Pack45.zip')
+        self._log(self.log2, '⬇️ 正在自动下载 VB-Cable 虚拟声卡…')
+        try:
+            urllib.request.urlretrieve(url, zip_path)
+            self._log(self.log2, '📦 下载完成，正在解压…')
+            with zipfile.ZipFile(zip_path, 'r') as z:
+                z.extractall(dest)
+            os.startfile(dest)
+            self._log(self.log2, f'✅ 已解压到：{dest}')
+            self._log(self.log2, '👉 请运行 VBCABLE_Setup_x64.exe 安装')
+            self._log(self.log2, '   （需管理员权限，安装完成后重启电脑再使用）')
+        except Exception as e:
+            self._log(self.log2, '❌ 下载失败: ' + str(e))
+        finally:
+            self.root.after(0, lambda: self.btn_rec.config(state='normal'))
 
     def stop(self):
         if self.stop_file:
