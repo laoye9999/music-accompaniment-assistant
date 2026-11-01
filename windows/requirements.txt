@@ -1,0 +1,3 @@
+demucs
+sounddevice
+numpy

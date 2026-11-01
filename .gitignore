@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+*.app
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 构建产物
+build/
+dist/
+*.exe
